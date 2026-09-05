@@ -505,10 +505,16 @@ void BleKeyboard::onConnect(BLEServer* pServer) {
 
 #if !defined(USE_NIMBLE)
 
+  // arduino-esp32 3.3 backs this library's BLE API with NimBLE, which manages
+  // the 0x2902 CCCD itself and refuses to register one as a BLEDescriptor
+  // (BLECharacteristic::addDescriptor returns early for that UUID). The lookup
+  // then yields nullptr and this dereference panics the moment a central
+  // connects. Under Bluedroid the descriptor is really there and this still
+  // does what it always did.
   BLE2902* desc = (BLE2902*)this->inputKeyboard->getDescriptorByUUID(BLEUUID((uint16_t)0x2902));
-  desc->setNotifications(true);
+  if (desc != nullptr) desc->setNotifications(true);
   desc = (BLE2902*)this->inputMediaKeys->getDescriptorByUUID(BLEUUID((uint16_t)0x2902));
-  desc->setNotifications(true);
+  if (desc != nullptr) desc->setNotifications(true);
 
 #endif // !USE_NIMBLE
 
@@ -519,10 +525,12 @@ void BleKeyboard::onDisconnect(BLEServer* pServer) {
 
 #if !defined(USE_NIMBLE)
 
+  // Same nullptr as in onConnect() above: under NimBLE there is no BLE2902
+  // object to find, and this would panic on every disconnect.
   BLE2902* desc = (BLE2902*)this->inputKeyboard->getDescriptorByUUID(BLEUUID((uint16_t)0x2902));
-  desc->setNotifications(false);
+  if (desc != nullptr) desc->setNotifications(false);
   desc = (BLE2902*)this->inputMediaKeys->getDescriptorByUUID(BLEUUID((uint16_t)0x2902));
-  desc->setNotifications(false);
+  if (desc != nullptr) desc->setNotifications(false);
 
   advertising->start();
 
