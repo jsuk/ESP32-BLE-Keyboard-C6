@@ -1,4 +1,13 @@
-// uncomment the following line to use NimBLE library
+// NimBLE-Arduino rather than the core's BLE library. This is not a size
+// optimisation -- it is the only way to be a keyboard *and* a mouse at once.
+// arduino-esp32's own BLE library keys a service's characteristics by UUID and
+// silently drops a second one with the same UUID (BLEService::addCharacteristic,
+// under CONFIG_NIMBLE_ENABLED), and every HID input report is 0x2a4d. The
+// dropped characteristic is never given to executeCreate(), so notify() on it
+// asserts and reboots the board. NimBLE-Arduino supports duplicate UUIDs.
+// Flip this on to build against NimBLE-Arduino, which is the only way to get a
+// working BLE mouse (see sendMouseReport). It compiles and links, but the board
+// does not boot with it as of this commit -- see ARCHITECTURE.md, Known broken.
 //#define USE_NIMBLE
 
 #ifndef ESP32_BLE_KEYBOARD_H
@@ -8,6 +17,9 @@
 
 #if defined(USE_NIMBLE)
 
+// The whole API, not two headers: the class below inherits NimBLEServerCallbacks
+// and NimBLECharacteristicCallbacks and holds a NimBLEAdvertising*.
+#include <NimBLEDevice.h>
 #include "NimBLECharacteristic.h"
 #include "NimBLEHIDDevice.h"
 
@@ -18,6 +30,9 @@
 #define BLECharacteristic          NimBLECharacteristic
 #define BLEAdvertising             NimBLEAdvertising
 #define BLEServer                  NimBLEServer
+#define BLEDescriptor              NimBLEDescriptor
+#define BLEUUID                    NimBLEUUID
+#define BLEService                 NimBLEService
 
 #else
 
@@ -135,6 +150,8 @@ private:
   BLECharacteristic* inputKeyboard;
   BLECharacteristic* outputKeyboard;
   BLECharacteristic* inputMediaKeys;
+  BLECharacteristic* inputMouse = nullptr;
+  bool               mouseEnabled = false;  // MOUSE on asks for it; see sendMouseReport
   BLEAdvertising*    advertising;
   KeyReport          _keyReport;
   MediaKeyReport     _mediaKeyReport;
@@ -155,6 +172,8 @@ public:
   void end(void);
   void sendReport(KeyReport* keys);
   void sendReport(MediaKeyReport* keys);
+  void sendMouseReport(uint8_t buttons, int8_t x, int8_t y, int8_t wheel);
+  void enableMouse(bool on) { mouseEnabled = on; }
   size_t press(uint8_t k);
   size_t press(const MediaKeyReport k);
   size_t release(uint8_t k);
@@ -173,9 +192,16 @@ public:
   void set_version(uint16_t version);
 protected:
   virtual void onStarted(BLEServer *pServer) { };
+#if defined(USE_NIMBLE)
+  // NimBLE-Arduino 2.x passes connection info to every callback.
+  void onConnect(BLEServer* pServer, NimBLEConnInfo& connInfo) override;
+  void onDisconnect(BLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override;
+  void onWrite(BLECharacteristic* me, NimBLEConnInfo& connInfo) override;
+#else
   virtual void onConnect(BLEServer* pServer) override;
   virtual void onDisconnect(BLEServer* pServer) override;
   virtual void onWrite(BLECharacteristic* me) override;
+#endif
 
 };
 

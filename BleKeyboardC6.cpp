@@ -29,6 +29,10 @@
 // Report IDs:
 #define KEYBOARD_ID 0x01
 #define MEDIA_KEYS_ID 0x02
+// A third collection so one profile can be a keyboard and a mouse at once.
+// Only one BLE HID profile runs on a board at a time, so a bridge forwarding a
+// USB keyboard and a USB pointing device has to describe both here or drop one.
+#define MOUSE_ID 0x03
 
 static const uint8_t _hidReportDescriptor[] = {
   USAGE_PAGE(1),      0x01,          // USAGE_PAGE (Generic Desktop Ctrls)
@@ -92,8 +96,54 @@ static const uint8_t _hidReportDescriptor[] = {
   USAGE(2),           0x83, 0x01,    //   Usage (Media sel)   ; bit 6: 64
   USAGE(2),           0x8A, 0x01,    //   Usage (Mail)        ; bit 7: 128
   HIDINPUT(1),        0x02,          //   INPUT (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position)
+  END_COLLECTION(0),                 // END_COLLECTION
+  // ------------------------------------------------- Mouse
+  // Report layout is [buttons][dx][dy][wheel] -- deliberately the same shape a
+  // USB boot mouse sends, so a forwarded report needs no rearranging.
+  USAGE_PAGE(1),      0x01,          // USAGE_PAGE (Generic Desktop)
+  USAGE(1),           0x02,          // USAGE (Mouse)
+  COLLECTION(1),      0x01,          // COLLECTION (Application)
+  REPORT_ID(1),       MOUSE_ID,      //   REPORT_ID (3)
+  USAGE(1),           0x01,          //   USAGE (Pointer)
+  COLLECTION(1),      0x00,          //   COLLECTION (Physical)
+  USAGE_PAGE(1),      0x09,          //     USAGE_PAGE (Button)
+  USAGE_MINIMUM(1),   0x01,          //     USAGE_MINIMUM (Button 1)
+  USAGE_MAXIMUM(1),   0x05,          //     USAGE_MAXIMUM (Button 5)
+  LOGICAL_MINIMUM(1), 0x00,          //     LOGICAL_MINIMUM (0)
+  LOGICAL_MAXIMUM(1), 0x01,          //     LOGICAL_MAXIMUM (1)
+  REPORT_SIZE(1),     0x01,          //     REPORT_SIZE (1)
+  REPORT_COUNT(1),    0x05,          //     REPORT_COUNT (5)
+  HIDINPUT(1),        0x02,          //     INPUT (Data,Var,Abs)
+  REPORT_SIZE(1),     0x03,          //     REPORT_SIZE (3)
+  REPORT_COUNT(1),    0x01,          //     REPORT_COUNT (1)
+  HIDINPUT(1),        0x03,          //     INPUT (Cnst,Var,Abs) ; button padding
+  USAGE_PAGE(1),      0x01,          //     USAGE_PAGE (Generic Desktop)
+  USAGE(1),           0x30,          //     USAGE (X)
+  USAGE(1),           0x31,          //     USAGE (Y)
+  USAGE(1),           0x38,          //     USAGE (Wheel)
+  LOGICAL_MINIMUM(1), 0x81,          //     LOGICAL_MINIMUM (-127)
+  LOGICAL_MAXIMUM(1), 0x7f,          //     LOGICAL_MAXIMUM (127)
+  REPORT_SIZE(1),     0x08,          //     REPORT_SIZE (8)
+  REPORT_COUNT(1),    0x03,          //     REPORT_COUNT (3)
+  HIDINPUT(1),        0x06,          //     INPUT (Data,Var,Rel) ; relative motion
+  END_COLLECTION(0),                 //   END_COLLECTION
   END_COLLECTION(0)                  // END_COLLECTION
 };
+
+#if defined(USE_NIMBLE)
+// One input-report characteristic, with the Report Reference descriptor that
+// binds it to a report id in the map above.
+static BLECharacteristic* makeInputReport(BLEService* svc, uint8_t reportId) {
+  BLECharacteristic* chr = svc->createCharacteristic(
+      BLEUUID((uint16_t)0x2a4d),
+      NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ_ENC);
+  BLEDescriptor* dsc = chr->createDescriptor(
+      BLEUUID((uint16_t)0x2908), NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::READ_ENC);
+  const uint8_t refVal[] = { reportId, 0x01 };   // 0x01 = Input
+  dsc->setValue(refVal, sizeof(refVal));
+  return chr;
+}
+#endif
 
 BleKeyboard::BleKeyboard(std::string deviceName, std::string deviceManufacturer, uint8_t batteryLevel) 
     : hid(0)
@@ -108,9 +158,27 @@ void BleKeyboard::begin(void)
   pServer->setCallbacks(this);
 
   hid = new BLEHIDDevice(pServer);
+#if defined(USE_NIMBLE)
+  inputKeyboard  = hid->getInputReport(KEYBOARD_ID);
+  outputKeyboard = hid->getOutputReport(KEYBOARD_ID);
+  // getInputReport() returns the *first* 0x2a4d characteristic whatever report
+  // id it is handed, so it cannot make a second one. Build the extra reports
+  // directly on the HID service instead, each with its own Report Reference
+  // descriptor (0x2908) naming its report id -- which is what tells a host
+  // which collection in the report map a notification belongs to.
+  inputMediaKeys = makeInputReport(hid->getHidService(), MEDIA_KEYS_ID);
+  inputMouse     = makeInputReport(hid->getHidService(), MOUSE_ID);
+
+  outputKeyboard->setCallbacks(this);
+
+  hid->setManufacturer(deviceManufacturer.c_str());
+  hid->setPnp(0x02, vid, pid, version);
+  hid->setHidInfo(0x00, 0x01);
+#else
   inputKeyboard = hid->inputReport(KEYBOARD_ID);  // <-- input REPORTID from report map
   outputKeyboard = hid->outputReport(KEYBOARD_ID);
   inputMediaKeys = hid->inputReport(MEDIA_KEYS_ID);
+  inputMouse = hid->inputReport(MOUSE_ID);
 
   outputKeyboard->setCallbacks(this);
 
@@ -118,6 +186,7 @@ void BleKeyboard::begin(void)
 
   hid->pnp(0x02, vid, pid, version);
   hid->hidInfo(0x00, 0x01);
+#endif
 
 
 #if defined(USE_NIMBLE)
@@ -131,15 +200,24 @@ void BleKeyboard::begin(void)
 
 #endif // USE_NIMBLE
 
+#if defined(USE_NIMBLE)
+  hid->setReportMap((uint8_t*)_hidReportDescriptor, sizeof(_hidReportDescriptor));
+#else
   hid->reportMap((uint8_t*)_hidReportDescriptor, sizeof(_hidReportDescriptor));
+#endif
   hid->startServices();
 
   onStarted(pServer);
 
   advertising = pServer->getAdvertising();
   advertising->setAppearance(HID_KEYBOARD);
+#if defined(USE_NIMBLE)
+  advertising->addServiceUUID(hid->getHidService()->getUUID());
+  advertising->enableScanResponse(false);   // setScanResponse() in 1.x
+#else
   advertising->addServiceUUID(hid->hidService()->getUUID());
   advertising->setScanResponse(false);
+#endif
   advertising->start();
   hid->setBatteryLevel(batteryLevel);
 
@@ -197,6 +275,32 @@ void BleKeyboard::sendReport(KeyReport* keys)
     this->delay_ms(_delay_ms);
 #endif // USE_NIMBLE
   }	
+}
+
+// Relative motion and button state, in the boot-mouse byte order.
+void BleKeyboard::sendMouseReport(uint8_t buttons, int8_t x, int8_t y, int8_t wheel)
+{
+  // The switch survives from when this reliably panicked the board: under
+  // arduino-esp32's own BLE library the mouse's input-report characteristic was
+  // dropped for having the same UUID (0x2a4d) as the keyboard's, and notify()
+  // on the unattached object asserted --
+  //
+  //   assert failed: BLECharacteristic::notify (getService()->getServer() != nullptr)
+  //
+  // taking the keyboard down with it on the first movement. Building against
+  // NimBLE-Arduino fixed that; the switch stays because a receiver whose report
+  // layout is decoded wrongly is better silenced than reflashed.
+  if (!this->mouseEnabled || this->inputMouse == nullptr) return;
+
+  if (this->isConnected())
+  {
+    uint8_t report[4] = { buttons, (uint8_t)x, (uint8_t)y, (uint8_t)wheel };
+    this->inputMouse->setValue(report, sizeof(report));
+    this->inputMouse->notify();
+#if defined(USE_NIMBLE)
+    this->delay_ms(_delay_ms);
+#endif // USE_NIMBLE
+  }
 }
 
 void BleKeyboard::sendReport(MediaKeyReport* keys)
@@ -500,6 +604,11 @@ size_t BleKeyboard::write(const uint8_t *buffer, size_t size) {
 	return n;
 }
 
+#if defined(USE_NIMBLE)
+void BleKeyboard::onConnect(BLEServer* pServer, NimBLEConnInfo& connInfo) {
+  this->connected = true;
+}
+#else
 void BleKeyboard::onConnect(BLEServer* pServer) {
   this->connected = true;
 
@@ -519,7 +628,13 @@ void BleKeyboard::onConnect(BLEServer* pServer) {
 #endif // !USE_NIMBLE
 
 }
+#endif // USE_NIMBLE
 
+#if defined(USE_NIMBLE)
+void BleKeyboard::onDisconnect(BLEServer* pServer, NimBLEConnInfo& connInfo, int reason) {
+  this->connected = false;
+}
+#else
 void BleKeyboard::onDisconnect(BLEServer* pServer) {
   this->connected = false;
 
@@ -536,8 +651,13 @@ void BleKeyboard::onDisconnect(BLEServer* pServer) {
 
 #endif // !USE_NIMBLE
 }
+#endif // USE_NIMBLE
 
+#if defined(USE_NIMBLE)
+void BleKeyboard::onWrite(BLECharacteristic* me, NimBLEConnInfo& connInfo) {
+#else
 void BleKeyboard::onWrite(BLECharacteristic* me) {
+#endif
   uint8_t* value = (uint8_t*)(me->getValue().c_str());
   (void)value;
   ESP_LOGI(LOG_TAG, "special keys: %d", *value);
