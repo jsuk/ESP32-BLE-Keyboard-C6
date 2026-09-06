@@ -169,11 +169,17 @@ void BleKeyboard::begin(void)
 #if defined(USE_NIMBLE)
   inputKeyboard  = hid->getInputReport(KEYBOARD_ID);
   outputKeyboard = hid->getOutputReport(KEYBOARD_ID);
-  // getInputReport() returns the *first* 0x2a4d characteristic whatever report
-  // id it is handed, so it cannot make a second one. Build the extra reports
-  // directly on the HID service instead, each with its own Report Reference
-  // descriptor (0x2908) naming its report id -- which is what tells a host
-  // which collection in the report map a notification belongs to.
+  // Extra reports are built directly on the HID service, each with its own
+  // Report Reference descriptor (0x2908) naming its report id -- which is what
+  // tells a host which collection in the report map a notification belongs to.
+  //
+  // This was written against NimBLE-Arduino 2.1.0, whose getInputReport()
+  // returns the *first* 0x2a4d characteristic whatever report id it is handed
+  // and so cannot make a second one. 2.5.1 fixed that: it locates by (report
+  // id, type). So these two lines could now be hid->getInputReport(...) and
+  // this helper deleted. Left alone deliberately -- the composite keyboard and
+  // mouse are verified working as written, and swapping verified code for
+  // untested equivalent code buys nothing. Do it when the board is in hand.
   inputMediaKeys = makeInputReport(hid->getHidService(), MEDIA_KEYS_ID);
   inputMouse     = makeInputReport(hid->getHidService(), MOUSE_ID);
 
