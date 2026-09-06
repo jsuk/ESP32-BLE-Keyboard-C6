@@ -145,6 +145,10 @@ static BLECharacteristic* makeInputReport(BLEService* svc, uint8_t reportId) {
 }
 #endif
 
+void (*BleKeyboard::progress)(const char *) = nullptr;
+
+#define BLEKB_STEP(x) do { if (BleKeyboard::progress) BleKeyboard::progress(x); } while (0)
+
 BleKeyboard::BleKeyboard(std::string deviceName, std::string deviceManufacturer, uint8_t batteryLevel) 
     : hid(0)
     , deviceName(std::string(deviceName).substr(0, 15))
@@ -153,11 +157,15 @@ BleKeyboard::BleKeyboard(std::string deviceName, std::string deviceManufacturer,
 
 void BleKeyboard::begin(void)
 {
+  BLEKB_STEP("kb-init");
   BLEDevice::init(deviceName.c_str());
+  BLEKB_STEP("kb-server");
   BLEServer* pServer = BLEDevice::createServer();
   pServer->setCallbacks(this);
 
+  BLEKB_STEP("kb-hiddev");
   hid = new BLEHIDDevice(pServer);
+  BLEKB_STEP("kb-reports");
 #if defined(USE_NIMBLE)
   inputKeyboard  = hid->getInputReport(KEYBOARD_ID);
   outputKeyboard = hid->getOutputReport(KEYBOARD_ID);
@@ -205,10 +213,12 @@ void BleKeyboard::begin(void)
 #else
   hid->reportMap((uint8_t*)_hidReportDescriptor, sizeof(_hidReportDescriptor));
 #endif
+  BLEKB_STEP("kb-services");
   hid->startServices();
 
   onStarted(pServer);
 
+  BLEKB_STEP("kb-adv");
   advertising = pServer->getAdvertising();
   advertising->setAppearance(HID_KEYBOARD);
 #if defined(USE_NIMBLE)
@@ -220,6 +230,7 @@ void BleKeyboard::begin(void)
 #endif
   advertising->start();
   hid->setBatteryLevel(batteryLevel);
+  BLEKB_STEP("kb-done");
 
   ESP_LOGD(LOG_TAG, "Advertising started!");
 }

@@ -8,7 +8,7 @@
 // Flip this on to build against NimBLE-Arduino, which is the only way to get a
 // working BLE mouse (see sendMouseReport). It compiles and links, but the board
 // does not boot with it as of this commit -- see ARCHITECTURE.md, Known broken.
-//#define USE_NIMBLE
+#define USE_NIMBLE
 
 #ifndef ESP32_BLE_KEYBOARD_H
 #define ESP32_BLE_KEYBOARD_H
@@ -167,6 +167,12 @@ private:
   uint16_t version   = 0x0210;
 
 public:
+  // Optional progress reporter, called at each step of begin(). A board whose
+  // BLE stack panics during startup has no other way to say which call did it:
+  // in the USB-host role there is no console, and the panic arrives before
+  // anything else is up. Set it before begin(); nullptr means silence.
+  static void (*progress)(const char *step);
+
   BleKeyboard(std::string deviceName = "ESP32 Keyboard", std::string deviceManufacturer = "Espressif", uint8_t batteryLevel = 100);
   void begin(void);
   void end(void);
