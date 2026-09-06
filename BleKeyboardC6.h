@@ -151,7 +151,7 @@ private:
   BLECharacteristic* outputKeyboard;
   BLECharacteristic* inputMediaKeys;
   BLECharacteristic* inputMouse = nullptr;
-  bool               mouseEnabled = false;  // MOUSE on asks for it; see sendMouseReport
+  bool               mouseEnabled = true;   // MOUSE off is the escape hatch
   BLEAdvertising*    advertising;
   KeyReport          _keyReport;
   MediaKeyReport     _mediaKeyReport;

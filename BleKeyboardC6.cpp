@@ -291,16 +291,19 @@ void BleKeyboard::sendReport(KeyReport* keys)
 // Relative motion and button state, in the boot-mouse byte order.
 void BleKeyboard::sendMouseReport(uint8_t buttons, int8_t x, int8_t y, int8_t wheel)
 {
-  // The switch survives from when this reliably panicked the board: under
-  // arduino-esp32's own BLE library the mouse's input-report characteristic was
-  // dropped for having the same UUID (0x2a4d) as the keyboard's, and notify()
-  // on the unattached object asserted --
+  // On by default. The switch survives from when this reliably panicked the
+  // board: under arduino-esp32's own BLE library the mouse's input-report
+  // characteristic was dropped for having the same UUID (0x2a4d) as the
+  // keyboard's, and notify() on the unattached object asserted --
   //
   //   assert failed: BLECharacteristic::notify (getService()->getServer() != nullptr)
   //
   // taking the keyboard down with it on the first movement. Building against
-  // NimBLE-Arduino fixed that; the switch stays because a receiver whose report
-  // layout is decoded wrongly is better silenced than reflashed.
+  // NimBLE-Arduino fixed that, so defaulting to off now costs more than it
+  // saves: the state does not persist, so any reboot silently stopped
+  // forwarding, and a test of a board that is not sending looks exactly like a
+  // test of a board whose reports are wrong. MOUSE off remains for a device
+  // whose report layout is being worked out.
   if (!this->mouseEnabled || this->inputMouse == nullptr) return;
 
   if (this->isConnected())
@@ -308,9 +311,11 @@ void BleKeyboard::sendMouseReport(uint8_t buttons, int8_t x, int8_t y, int8_t wh
     uint8_t report[4] = { buttons, (uint8_t)x, (uint8_t)y, (uint8_t)wheel };
     this->inputMouse->setValue(report, sizeof(report));
     this->inputMouse->notify();
-#if defined(USE_NIMBLE)
-    this->delay_ms(_delay_ms);
-#endif // USE_NIMBLE
+    // No inter-report delay here, unlike the keyboard. That delay paces
+    // keystrokes so a host does not drop one of a burst; a pointer has no such
+    // problem, and blocking 7ms per report caps the rate near 140Hz before the
+    // rest of loop() has run at all -- which is felt directly, as a cursor that
+    // moves in steps.
   }
 }
 
